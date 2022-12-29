@@ -90,8 +90,23 @@ import {
   createInitialOptions,
   buildFederatedQueryGraph,
 } from "@apollo/query-graphs";
-import { stripIgnoredCharacters, print, parse, OperationTypeNode } from "graphql";
-import { DeferredNode, FetchDataInputRewrite, FetchDataOutputRewrite } from ".";
+import {
+  stripIgnoredCharacters,
+  print,
+  parse,
+  OperationTypeNode,
+  DirectiveNode,
+  SelectionNode,
+  //ArgumentNode,
+  //BooleanValueNode,
+  VariableNode,
+  //ValueNode,
+} from "graphql";
+import {//ConditionNode,
+  DeferredNode,
+  FetchDataInputRewrite,
+  FetchDataOutputRewrite
+} from ".";
 import { enforceQueryPlannerConfigDefaults, QueryPlannerConfig } from "./config";
 import { QueryPlan, ResponsePath, SequenceNode, PlanNode, ParallelNode, FetchNode, trimSelectionNodes } from "./QueryPlan";
 
@@ -1185,13 +1200,28 @@ class FetchGroup {
       outputRewrites: outputRewrites.length === 0 ? undefined : outputRewrites,
     };
 
+    const selectionSetNode = this.selection.toSelectionSetNode()
+    const selections = selectionSetNode.selections
+    const selectionNode = selections[0]
+    const conditions = collectConditionalValues(selectionNode)
+
+    if (conditions.size > 0) {
+      return this.isTopLevel
+          ? computeConditionNodeForTopLevelIncludeAndSkip(fetchNode, conditions)
+          : {
+            kind: 'Flatten',
+            path: this.mergeAt!,
+            node: computeConditionNodeForTopLevelIncludeAndSkip(fetchNode, conditions),
+          };
+    }
+
     return this.isTopLevel
-      ? fetchNode
-      : {
-        kind: 'Flatten',
-        path: this.mergeAt!,
-        node: fetchNode,
-      };
+        ? fetchNode
+        : {
+          kind: 'Flatten',
+          path: this.mergeAt!,
+          node: fetchNode,
+        };
   }
 
   toString(): string {
@@ -1199,6 +1229,90 @@ class FetchGroup {
     return this.isTopLevel
       ? `${base}[${this._selection}]`
       : `${base}@(${this.mergeAt})[${this._inputs} => ${this._selection}]`;
+  }
+}
+
+export function findDirectivesOnNode<
+    T extends { directives?: readonly DirectiveNode[] },
+>(node: T, directiveName: string) {
+  return (
+      node.directives?.filter(
+          (directive) => directive.name.value === directiveName,
+      ) ?? []
+  );
+}
+
+function collectConditionalValues(selection: SelectionNode): Map<string,string> {
+  let conditions = new Map<string,string>()
+  const skips = findDirectivesOnNode(selection, 'skip');
+  const includes = findDirectivesOnNode(selection, 'include');
+
+  const skip = skips.length > 0 ? extractConditionalValue(skips[0]) : null;
+  if (skip) {
+    conditions.set('skip', skip)
+  }
+  const include = includes.length > 0 ? extractConditionalValue(includes[0]) : null;
+  if (include) {
+    conditions.set('include', include)
+  }
+  return conditions
+}
+
+function extractConditionalValue(conditionalDirective: DirectiveNode) {
+  const conditionalArg = conditionalDirective.arguments![0].value as VariableNode;
+
+  return conditionalArg.name.value
+}
+
+function computeConditionNodeForTopLevelIncludeAndSkip(
+  planNode: PlanNode,
+  conditions: Map<string, string>,
+): PlanNode | undefined {
+  return generateConditionNodesForTopLevelIncludeAndSkip(
+      Array.from(conditions.entries()),
+      0,
+      planNode)
+}
+
+function generateConditionNodesForTopLevelIncludeAndSkip(
+    conditions: [string, string][],
+    idx: number,
+    planNode: PlanNode | undefined,
+): (PlanNode | undefined) {
+  if (idx >= conditions.length) {
+    return planNode;
+  }
+
+  const [directive, variable] = conditions[idx];
+
+  switch(directive){
+    case 'include': {
+      return {
+        kind: 'Condition',
+        condition: variable,
+        // Note: for the `<variable>: true` case, we don't modify the operation at all. In theory, it would be cleaner to
+        // modify the operation to remove the `if` condition on all the `@defer` from `labels` (or modify it to hard-coded 'true'),
+        // to make it clear those @defer are "enabled" on that branch. In practice though, the rest of the query planning
+        // completely ignores the `if` argument, so leaving it in untouched ends up equivalent and that saves us a few cyclesf.
+        ifClause: generateConditionNodesForTopLevelIncludeAndSkip( conditions, idx+1, planNode),
+        elseClause: undefined,
+      };
+    }
+    case 'skip': {
+      return {
+        kind: 'Condition',
+        condition: variable,
+        // Note: for the `<variable>: true` case, we don't modify the operation at all. In theory, it would be cleaner to
+        // modify the operation to remove the `if` condition on all the `@defer` from `labels` (or modify it to hard-coded 'true'),
+        // to make it clear those @defer are "enabled" on that branch. In practice though, the rest of the query planning
+        // completely ignores the `if` argument, so leaving it in untouched ends up equivalent and that saves us a few cyclesf.
+        ifClause: undefined,
+        elseClause: generateConditionNodesForTopLevelIncludeAndSkip( conditions, idx+1, planNode),
+      };
+    }
+    default: {
+      return undefined
+    }
   }
 }
 
