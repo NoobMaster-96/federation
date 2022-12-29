@@ -1290,10 +1290,6 @@ function generateConditionNodesForTopLevelIncludeAndSkip(
       return {
         kind: 'Condition',
         condition: variable,
-        // Note: for the `<variable>: true` case, we don't modify the operation at all. In theory, it would be cleaner to
-        // modify the operation to remove the `if` condition on all the `@defer` from `labels` (or modify it to hard-coded 'true'),
-        // to make it clear those @defer are "enabled" on that branch. In practice though, the rest of the query planning
-        // completely ignores the `if` argument, so leaving it in untouched ends up equivalent and that saves us a few cyclesf.
         ifClause: generateConditionNodesForTopLevelIncludeAndSkip( conditions, idx+1, planNode),
         elseClause: undefined,
       };
@@ -1302,10 +1298,6 @@ function generateConditionNodesForTopLevelIncludeAndSkip(
       return {
         kind: 'Condition',
         condition: variable,
-        // Note: for the `<variable>: true` case, we don't modify the operation at all. In theory, it would be cleaner to
-        // modify the operation to remove the `if` condition on all the `@defer` from `labels` (or modify it to hard-coded 'true'),
-        // to make it clear those @defer are "enabled" on that branch. In practice though, the rest of the query planning
-        // completely ignores the `if` argument, so leaving it in untouched ends up equivalent and that saves us a few cyclesf.
         ifClause: undefined,
         elseClause: generateConditionNodesForTopLevelIncludeAndSkip( conditions, idx+1, planNode),
       };
