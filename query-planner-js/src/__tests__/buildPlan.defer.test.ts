@@ -2540,9 +2540,11 @@ describe('defer with conditions', () => {
     const [api, queryPlanner] = composeAndCreatePlannerWithDefer(subgraph1);
     const operation = operationFromDocument(api, gql`
       query($cond: Boolean) {
-        t @include(if: $cond){
-            x
+        t {
+          x
+          ... @defer(if: $cond) {
             y
+          }
         }
       }
     `);
