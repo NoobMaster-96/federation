@@ -1205,23 +1205,22 @@ class FetchGroup {
     const selectionNode = selections[0]
     const conditions = collectConditionalValues(selectionNode)
 
-    if (conditions.size > 0) {
-      return this.isTopLevel
-          ? computeConditionNodeForTopLevelIncludeAndSkip(fetchNode, conditions)
-          : {
-            kind: 'Flatten',
-            path: this.mergeAt!,
-            node: computeConditionNodeForTopLevelIncludeAndSkip(fetchNode, conditions),
-          };
-    }
+    const wrappedFetchNode = conditions.reduce<PlanNode>((planNode: PlanNode, condition: DirectiveCondition) => {
+      return {
+        kind: 'Condition',
+        condition: condition.variable,
+        ifClause: condition.directiveName === 'include' ? planNode : undefined,
+        elseClause: condition.directiveName === 'skip' ? planNode : undefined,
+      };
+    }, fetchNode);
 
     return this.isTopLevel
-        ? fetchNode
-        : {
-          kind: 'Flatten',
-          path: this.mergeAt!,
-          node: fetchNode,
-        };
+      ? wrappedFetchNode
+      : {
+        kind: 'Flatten',
+        path: this.mergeAt!,
+        node: wrappedFetchNode,
+      };
   }
 
   toString(): string {
@@ -1230,6 +1229,11 @@ class FetchGroup {
       ? `${base}[${this._selection}]`
       : `${base}@(${this.mergeAt})[${this._inputs} => ${this._selection}]`;
   }
+}
+
+type DirectiveCondition = {
+  variable: string;
+  directiveName: 'skip' | 'include';
 }
 
 export function findDirectivesOnNode<
@@ -1242,70 +1246,30 @@ export function findDirectivesOnNode<
   );
 }
 
-function collectConditionalValues(selection: SelectionNode): Map<string,string> {
-  let conditions = new Map<string,string>()
+function collectConditionalValues(selection: SelectionNode): DirectiveCondition[] {
+
   const skips = findDirectivesOnNode(selection, 'skip');
   const includes = findDirectivesOnNode(selection, 'include');
 
+  const val: DirectiveCondition[] = [];
+
   const skip = skips.length > 0 ? extractConditionalValue(skips[0]) : null;
   if (skip) {
-    conditions.set('skip', skip)
+    val.push({ variable: skip, directiveName: 'skip' });
   }
+
   const include = includes.length > 0 ? extractConditionalValue(includes[0]) : null;
   if (include) {
-    conditions.set('include', include)
+    val.push({ variable: include, directiveName: 'include' });
   }
-  return conditions
+
+  return val;
 }
 
 function extractConditionalValue(conditionalDirective: DirectiveNode) {
   const conditionalArg = conditionalDirective.arguments![0].value as VariableNode;
 
   return conditionalArg.name.value
-}
-
-function computeConditionNodeForTopLevelIncludeAndSkip(
-  planNode: PlanNode,
-  conditions: Map<string, string>,
-): PlanNode | undefined {
-  return generateConditionNodesForTopLevelIncludeAndSkip(
-      Array.from(conditions.entries()),
-      0,
-      planNode)
-}
-
-function generateConditionNodesForTopLevelIncludeAndSkip(
-    conditions: [string, string][],
-    idx: number,
-    planNode: PlanNode | undefined,
-): (PlanNode | undefined) {
-  if (idx >= conditions.length) {
-    return planNode;
-  }
-
-  const [directive, variable] = conditions[idx];
-
-  switch(directive){
-    case 'include': {
-      return {
-        kind: 'Condition',
-        condition: variable,
-        ifClause: generateConditionNodesForTopLevelIncludeAndSkip( conditions, idx+1, planNode),
-        elseClause: undefined,
-      };
-    }
-    case 'skip': {
-      return {
-        kind: 'Condition',
-        condition: variable,
-        ifClause: undefined,
-        elseClause: generateConditionNodesForTopLevelIncludeAndSkip( conditions, idx+1, planNode),
-      };
-    }
-    default: {
-      return undefined
-    }
-  }
 }
 
 function genAliasName(baseName: string, unavailableNames: Map<string, any>): string {

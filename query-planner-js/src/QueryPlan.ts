@@ -90,7 +90,7 @@ export interface FetchDataKeyRenamer {
 export interface FlattenNode {
   kind: 'Flatten';
   path: ResponsePath;
-  node?: PlanNode;
+  node: PlanNode;
 }
 
 /**
