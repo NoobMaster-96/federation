@@ -92,8 +92,23 @@ import {
   createInitialOptions,
   buildFederatedQueryGraph,
 } from "@apollo/query-graphs";
-import { stripIgnoredCharacters, print, parse, OperationTypeNode } from "graphql";
-import { DeferredNode, FetchDataInputRewrite, FetchDataOutputRewrite } from ".";
+import {
+  stripIgnoredCharacters,
+  print,
+  parse,
+  OperationTypeNode,
+  DirectiveNode,
+  SelectionNode,
+  //ArgumentNode,
+  //BooleanValueNode,
+  VariableNode,
+  //ValueNode,
+} from "graphql";
+import {//ConditionNode,
+  DeferredNode,
+  FetchDataInputRewrite,
+  FetchDataOutputRewrite
+} from ".";
 import { enforceQueryPlannerConfigDefaults, QueryPlannerConfig } from "./config";
 import { generateAllPlansAndFindBest } from "./generateAllPlans";
 import { QueryPlan, ResponsePath, SequenceNode, PlanNode, ParallelNode, FetchNode, trimSelectionNodes } from "./QueryPlan";
@@ -1252,12 +1267,26 @@ class FetchGroup {
       outputRewrites: outputRewrites.length === 0 ? undefined : outputRewrites,
     };
 
+    const selectionSetNode = this.selection.toSelectionSetNode()
+    const selections = selectionSetNode.selections
+    const selectionNode = selections[0]
+    const conditions = collectConditionalValues(selectionNode)
+
+    const wrappedFetchNode = conditions.reduce<PlanNode>((planNode: PlanNode, condition: DirectiveCondition) => {
+      return {
+        kind: 'Condition',
+        condition: condition.variable,
+        ifClause: condition.directiveName === 'include' ? planNode : undefined,
+        elseClause: condition.directiveName === 'skip' ? planNode : undefined,
+      };
+    }, fetchNode);
+
     return this.isTopLevel
-      ? fetchNode
+      ? wrappedFetchNode
       : {
         kind: 'Flatten',
         path: this.mergeAt!,
-        node: fetchNode,
+        node: wrappedFetchNode,
       };
   }
 
@@ -1267,6 +1296,47 @@ class FetchGroup {
       ? `${base}[${this._selection}]`
       : `${base}@(${this.mergeAt})[${this._inputs} => ${this._selection}]`;
   }
+}
+
+type DirectiveCondition = {
+  variable: string;
+  directiveName: 'skip' | 'include';
+}
+
+export function findDirectivesOnNode<
+    T extends { directives?: readonly DirectiveNode[] },
+>(node: T, directiveName: string) {
+  return (
+      node.directives?.filter(
+          (directive) => directive.name.value === directiveName,
+      ) ?? []
+  );
+}
+
+function collectConditionalValues(selection: SelectionNode): DirectiveCondition[] {
+
+  const skips = findDirectivesOnNode(selection, 'skip');
+  const includes = findDirectivesOnNode(selection, 'include');
+
+  const val: DirectiveCondition[] = [];
+
+  const skip = skips.length > 0 ? extractConditionalValue(skips[0]) : null;
+  if (skip) {
+    val.push({ variable: skip, directiveName: 'skip' });
+  }
+
+  const include = includes.length > 0 ? extractConditionalValue(includes[0]) : null;
+  if (include) {
+    val.push({ variable: include, directiveName: 'include' });
+  }
+
+  return val;
+}
+
+function extractConditionalValue(conditionalDirective: DirectiveNode) {
+  const conditionalArg = conditionalDirective.arguments![0].value as VariableNode;
+
+  return conditionalArg.name.value
 }
 
 function genAliasName(baseName: string, unavailableNames: Map<string, any>): string {
